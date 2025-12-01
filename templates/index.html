@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TriMind AI - Multi-Model Intelligence</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <!-- Header Section -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-icon">🧠</span>
+        <span class="logo-text">TriMind AI</span>
+      </div>
+      <div class="tagline">GPT-4o · Claude · Command-R+</div>
+    </div>
+    <div class="header-right">
+      <button id="dark-toggle" class="icon-btn" title="Toggle Dark Mode">🌙</button>
+      <button id="clear-chat" class="icon-btn" title="Clear Chat History">🗑️</button>
+      <button id="logout-btn" class="logout-btn" onclick="window.location.href='/logout'">Logout</button>
+    </div>
+  </header>
+
+  <!-- Main Chat Container -->
+  <div class="chat-container">
+    <div class="chat-box" id="chat-box">
+      <div class="welcome-message">
+        <h2>Welcome to TriMind AI</h2>
+        <p>Ask me anything. I aggregate responses from GPT-4o, Claude-3.5-Sonnet, and Command-R-Plus to give you the best answer.</p>
+      </div>
+    </div>
+    
+    <!-- Input Area -->
+    <div class="input-area">
+      <button class="attach-btn" onclick="document.getElementById('file-upload').click()" title="Upload File">📎</button>
+      <input type="file" id="file-upload" accept=".pdf,image/*" style="display:none;">
+      <input type="text" id="user-input" placeholder="Type your message..." onkeydown="if(event.key === 'Enter') sendMessage()">
+      <button class="voice-btn" onclick="startVoiceInput()" title="Voice Input">🎤</button>
+      <button class="send-btn" onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+
+  <!-- Modal for API Response Comparison -->
+  <div id="apiModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Multi-API Response Comparison</h2>
+        <span class="close" onclick="closeModal()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="validation-badge">
+          <span class="badge-icon">✓</span>
+          <span>Validated by Gemini AI Quality Analyzer</span>
+        </div>
+        
+        <div class="api-responses-grid">
+          <div class="api-response-card">
+            <div class="api-header gpt">
+              <span class="api-icon">🟢</span>
+              <h3>GPT-4o</h3>
+              <span class="api-provider">OpenAI</span>
+            </div>
+            <div class="response-content" id="gpt-response">Loading...</div>
+            <div class="api-score" id="gpt-score"></div>
+          </div>
+          
+          <div class="api-response-card">
+            <div class="api-header claude">
+              <span class="api-icon">🟣</span>
+              <h3>Claude-3.5-Sonnet</h3>
+              <span class="api-provider">Anthropic</span>
+            </div>
+            <div class="response-content" id="claude-response">Loading...</div>
+            <div class="api-score" id="claude-score"></div>
+          </div>
+          
+          <div class="api-response-card">
+            <div class="api-header cohere">
+              <span class="api-icon">🔵</span>
+              <h3>Command-R-Plus</h3>
+              <span class="api-provider">Cohere</span>
+            </div>
+            <div class="response-content" id="cohere-response">Loading...</div>
+            <div class="api-score" id="cohere-score"></div>
+          </div>
+        </div>
+        
+        <div class="winner-section" id="winner-section" style="display:none;">
+          <h3>Best Response Selected: <span id="winner-model"></span></h3>
+          <p>Selected based on Gemini's quality analysis: accuracy, completeness, clarity, and helpfulness.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const input = document.getElementById("user-input");
+  const chatBox = document.getElementById("chat-box");
+  const synth = window.speechSynthesis;
+  let currentUtterance = null;
+  let lastApiResponses = null;
+
+  window.onload = () => {
+    const history = JSON.parse(localStorage.getItem("chatHistory")) || [];
+    if (history.length > 0) {
+      document.querySelector('.welcome-message')?.remove();
+      history.forEach(entry => {
+        if (entry.sender === "bot") {
+          appendBotMessage(entry.text, entry.model);
+        } else {
+          chatBox.innerHTML += `<div class="message ${entry.sender}">${escapeHtml(entry.text)}</div>`;
+        }
+      });
+    }
+    chatBox.scrollTop = chatBox.scrollHeight;
+    
+    if (localStorage.getItem("darkMode") === "true") {
+      document.body.classList.add("dark-mode");
+      document.getElementById("dark-toggle").textContent = "☀️";
+    }
+  };
+
+  document.getElementById("dark-toggle").onclick = () => {
+    document.body.classList.toggle("dark-mode");
+    const isDark = document.body.classList.contains("dark-mode");
+    document.getElementById("dark-toggle").textContent = isDark ? "☀️" : "🌙";
+    localStorage.setItem("darkMode", isDark);
+  };
+
+  document.getElementById("clear-chat").onclick = () => {
+    if (confirm("Clear all chat history?")) {
+      localStorage.removeItem("chatHistory");
+      chatBox.innerHTML = `
+        <div class="welcome-message">
+          <h2>Welcome to TriMind AI</h2>
+          <p>Ask me anything. I aggregate responses from GPT-4o, Claude-3.5-Sonnet, and Command-R-Plus to give you the best answer.</p>
+        </div>
+      `;
+    }
+  };
+
+  function saveToHistory(sender, text, model = null) {
+    const history = JSON.parse(localStorage.getItem("chatHistory")) || [];
+    history.push({ sender, text, model });
+    localStorage.setItem("chatHistory", JSON.stringify(history));
+  }
+
+  async function sendMessage() {
+    const message = input.value.trim();
+    if (!message) return;
+
+    document.querySelector('.welcome-message')?.remove();
+
+    chatBox.innerHTML += `<div class="message user">${escapeHtml(message)}</div>`;
+    saveToHistory("user", message);
+    input.value = "";
+
+    const typing = document.createElement("div");
+    typing.className = "message bot typing";
+    typing.innerHTML = '<span class="typing-dots"><span>.</span><span>.</span><span>.</span></span> TriMind is thinking...';
+    chatBox.appendChild(typing);
+    chatBox.scrollTop = chatBox.scrollHeight;
+
+    try {
+      const response = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message })
+      });
+      const data = await response.json();
+      typing.remove();
+      
+      lastApiResponses = data;
+      
+      appendBotMessage(data.reply, data.model_used);
+      saveToHistory("bot", data.reply, data.model_used);
+    } catch (err) {
+      typing.remove();
+      chatBox.innerHTML += `<div class="message bot error">⚠️ Error getting response. Please try again.</div>`;
+    }
+  }
+
+  function formatMarkdown(text) {
+    if (!text) return '';
+    
+    // Escape HTML first to prevent XSS
+    let formatted = escapeHtml(text);
+    
+    // Split into lines for better processing
+    const lines = formatted.split('\n');
+    const result = [];
+    let inCodeBlock = false;
+    let codeBlockContent = [];
+    let inList = false;
+    let listItems = [];
+    let listType = null; // 'ul' or 'ol'
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      
+      // Handle code blocks
+      if (trimmed.startsWith('```')) {
+        if (inCodeBlock) {
+          // Close code block
+          result.push(`<pre><code class="code-block">${codeBlockContent.join('\n')}</code></pre>`);
+          codeBlockContent = [];
+          inCodeBlock = false;
+        } else {
+          // Open code block
+          if (inList) {
+            result.push(listType === 'ul' ? '</ul>' : '</ol>');
+            inList = false;
+            listItems = [];
+          }
+          inCodeBlock = true;
+        }
+        continue;
+      }
+      
+      if (inCodeBlock) {
+        codeBlockContent.push(line);
+        continue;
+      }
+      
+      // Handle headers
+      if (trimmed.startsWith('### ')) {
+        if (inList) {
+          result.push(listType === 'ul' ? '</ul>' : '</ol>');
+          inList = false;
+          listItems = [];
+        }
+        result.push(`<h3>${trimmed.substring(4)}</h3>`);
+        continue;
+      }
+      if (trimmed.startsWith('## ')) {
+        if (inList) {
+          result.push(listType === 'ul' ? '</ul>' : '</ol>');
+          inList = false;
+          listItems = [];
+        }
+        result.push(`<h2>${trimmed.substring(3)}</h2>`);
+        continue;
+      }
+      if (trimmed.startsWith('# ')) {
+        if (inList) {
+          result.push(listType === 'ul' ? '</ul>' : '</ol>');
+          inList = false;
+          listItems = [];
+        }
+        result.push(`<h1>${trimmed.substring(2)}</h1>`);
+        continue;
+      }
+      
+      // Handle ordered lists
+      const orderedMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
+      if (orderedMatch) {
+        if (inList && listType !== 'ol') {
+          result.push('</ul>');
+          listItems = [];
+        }
+        if (!inList) {
+          listType = 'ol';
+          inList = true;
+        }
+        listItems.push(`<li>${orderedMatch[2]}</li>`);
+        continue;
+      }
+      
+      // Handle unordered lists
+      const unorderedMatch = trimmed.match(/^[-*+]\s+(.+)$/);
+      if (unorderedMatch) {
+        if (inList && listType !== 'ul') {
+          result.push('</ol>');
+          listItems = [];
+        }
+        if (!inList) {
+          listType = 'ul';
+          inList = true;
+        }
+        listItems.push(`<li>${unorderedMatch[1]}</li>`);
+        continue;
+      }
+      
+      // Empty line or regular text
+      if (trimmed === '') {
+        if (inList) {
+          result.push(listType === 'ul' ? '<ul>' : '<ol>');
+          result.push(...listItems);
+          result.push(listType === 'ul' ? '</ul>' : '</ol>');
+          inList = false;
+          listItems = [];
+          listType = null;
+        }
+        result.push('<br>');
+      } else {
+        if (inList) {
+          result.push(listType === 'ul' ? '<ul>' : '<ol>');
+          result.push(...listItems);
+          result.push(listType === 'ul' ? '</ul>' : '</ol>');
+          inList = false;
+          listItems = [];
+          listType = null;
+        }
+        result.push(`<p>${line}</p>`);
+      }
+    }
+    
+    // Close any open lists
+    if (inList) {
+      result.push(listType === 'ul' ? '<ul>' : '<ol>');
+      result.push(...listItems);
+      result.push(listType === 'ul' ? '</ul>' : '</ol>');
+    }
+    
+    formatted = result.join('');
+    
+    // Process inline formatting (bold, italic, code)
+    // Bold first (to avoid conflicts with italic)
+    formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    formatted = formatted.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    
+    // Inline code (before italic to avoid conflicts)
+    formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+    
+    // Italic - simple approach: single * or _ (avoiding conflicts with bold)
+    // Match *text* but not **text** or *text* that's already processed
+    formatted = formatted.replace(/\b\*([^*\n]+?)\*\b/g, '<em>$1</em>');
+    formatted = formatted.replace(/\b_([^_\n]+?)_\b/g, '<em>$1</em>');
+    
+    return formatted;
+  }
+
+  function appendBotMessage(text, modelUsed = null) {
+    const botMessage = document.createElement("div");
+    botMessage.className = "message bot";
+    botMessage.innerHTML = `
+      <div class="message-content">${formatMarkdown(text)}</div>
+      <div class="bot-actions">
+        <button class="action-btn speak-btn" onclick="speak(this.closest('.message').querySelector('.message-content').textContent)" title="Read Aloud">🔊</button>
+        <button class="action-btn pause-btn" onclick="pauseSpeech()" title="Pause/Resume">⏸️</button>
+        ${modelUsed ? `<button class="action-btn compare-btn" onclick="showApiComparison()" title="View All Responses">🔍 Compare</button>` : ''}
+      </div>
+      ${modelUsed ? `<div class="model-badge"><span class="badge-dot"></span>Validated by ${modelUsed}</div>` : ''}
+    `;
+    chatBox.appendChild(botMessage);
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }
+
+  function showApiComparison() {
+    if (!lastApiResponses || !lastApiResponses.all_responses) {
+      alert("No comparison data available");
+      return;
+    }
+
+    const modal = document.getElementById("apiModal");
+    const responses = lastApiResponses.all_responses;
+    const winner = lastApiResponses.model_used;
+
+    const modelMap = {
+      "GPT-4o": "gpt",
+      "Claude-3.5-Sonnet": "claude",
+      "Command-R-Plus": "cohere"
+    };
+
+    Object.keys(responses).forEach(model => {
+      const key = modelMap[model];
+      const responseElement = document.getElementById(`${key}-response`);
+      const scoreElement = document.getElementById(`${key}-score`);
+      
+      if (responseElement) {
+        responseElement.innerHTML = formatMarkdown(responses[model]);
+        const score = scoreResponse(responses[model]);
+        scoreElement.innerHTML = `<strong>Quality Score:</strong> ${score} points`;
+        
+        const card = responseElement.closest('.api-response-card');
+        if (model === winner) {
+          card.classList.add('winner');
+        } else {
+          card.classList.remove('winner');
+        }
+      }
+    });
+
+    document.getElementById("winner-model").textContent = winner;
+    document.getElementById("winner-section").style.display = "block";
+
+    modal.style.display = "block";
+  }
+
+  function closeModal() {
+    document.getElementById("apiModal").style.display = "none";
+  }
+
+  function scoreResponse(text) {
+    if (!text) return 0;
+    return text.split(' ').length + text.split('.').length + text.split('!').length + text.split('?').length;
+  }
+
+  window.onclick = function(event) {
+    const modal = document.getElementById("apiModal");
+    if (event.target == modal) {
+      closeModal();
+    }
+  }
+
+  function speak(text) {
+    if (synth.speaking) synth.cancel();
+    currentUtterance = new SpeechSynthesisUtterance(text);
+    currentUtterance.lang = "en-US";
+    synth.speak(currentUtterance);
+  }
+
+  function pauseSpeech() {
+    if (synth.speaking && !synth.paused) synth.pause();
+    else if (synth.paused) synth.resume();
+  }
+
+  function startVoiceInput() {
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.lang = "en-US";
+    recognition.start();
+    recognition.onresult = event => {
+      input.value = event.results[0][0].transcript;
+      sendMessage();
+    };
+    recognition.onerror = () => {
+      alert("Voice recognition failed. Please try again.");
+    };
+  }
+
+  document.getElementById("file-upload").addEventListener("change", async function () {
+    const file = this.files[0];
+    if (!file) return;
+
+    document.querySelector('.welcome-message')?.remove();
+
+    chatBox.innerHTML += `<div class="message user file-message">📁 ${escapeHtml(file.name)}</div>`;
+    saveToHistory("user", `📁 ${file.name}`);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const typing = document.createElement("div");
+    typing.className = "message bot typing";
+    typing.innerHTML = '<span class="typing-dots"><span>.</span><span>.</span><span>.</span></span> Processing file...';
+    chatBox.appendChild(typing);
+    chatBox.scrollTop = chatBox.scrollHeight;
+
+    try {
+      const response = await fetch("/upload", {
+        method: "POST",
+        body: formData
+      });
+      const data = await response.json();
+      typing.remove();
+      appendBotMessage(data.reply);
+      saveToHistory("bot", data.reply);
+    } catch (err) {
+      typing.remove();
+      chatBox.innerHTML += `<div class="message bot error">⚠️ File processing failed.</div>`;
+    }
+    
+    this.value = '';
+  });
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+</script>
+</body>
+</html>
